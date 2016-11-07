@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2008 The Android Open Source Project
- * Copyright (c) 2010-2013 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2010-2012 The Linux Foundation. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -72,6 +72,7 @@ static int fb_setSwapInterval(struct framebuffer_device_t* dev,
     if (property_interval >= 0)
         interval = property_interval;
 
+    fb_context_t* ctx = (fb_context_t*)dev;
     private_module_t* m = reinterpret_cast<private_module_t*>(
         dev->common.module);
     if (interval < dev->minSwapInterval || interval > dev->maxSwapInterval)
@@ -98,7 +99,7 @@ static int fb_post(struct framebuffer_device_t* dev, buffer_handle_t buffer)
     return 0;
 }
 
-static int fb_compositionComplete(struct framebuffer_device_t* dev)
+static int fb_compositionComplete(struct framebuffer_device_t* /*dev*/)
 {
     // TODO: Properly implement composition complete callback
     glFinish();
@@ -133,12 +134,16 @@ int mapFrameBufferLocked(struct private_module_t* module)
     memset(&module->commit, 0, sizeof(struct mdp_display_commit));
 
     struct fb_fix_screeninfo finfo;
-    if (ioctl(fd, FBIOGET_FSCREENINFO, &finfo) == -1)
+    if (ioctl(fd, FBIOGET_FSCREENINFO, &finfo) == -1) {
+        close(fd);
         return -errno;
+    }
 
     struct fb_var_screeninfo info;
-    if (ioctl(fd, FBIOGET_VSCREENINFO, &info) == -1)
+    if (ioctl(fd, FBIOGET_VSCREENINFO, &info) == -1) {
+        close(fd);
         return -errno;
+    }
 
     info.reserved[0] = 0;
     info.reserved[1] = 0;
@@ -231,8 +236,10 @@ int mapFrameBufferLocked(struct private_module_t* module)
               info.yres_virtual, info.yres*2);
     }
 
-    if (ioctl(fd, FBIOGET_VSCREENINFO, &info) == -1)
+    if (ioctl(fd, FBIOGET_VSCREENINFO, &info) == -1) {
+        close(fd);
         return -errno;
+    }
 
     if (int(info.width) <= 0 || int(info.height) <= 0) {
         // the driver doesn't return that information
@@ -249,6 +256,7 @@ int mapFrameBufferLocked(struct private_module_t* module)
     metadata.op = metadata_op_frame_rate;
     if (ioctl(fd, MSMFB_METADATA_GET, &metadata) == -1) {
         ALOGE("Error retrieving panel frame rate");
+        close(fd);
         return -errno;
     }
     float fps  = metadata.data.panel_frame_rate;
@@ -288,11 +296,15 @@ int mapFrameBufferLocked(struct private_module_t* module)
          );
 
 
-    if (ioctl(fd, FBIOGET_FSCREENINFO, &finfo) == -1)
+    if (ioctl(fd, FBIOGET_FSCREENINFO, &finfo) == -1) {
+        close(fd);
         return -errno;
+    }
 
-    if (finfo.smem_len <= 0)
+    if (finfo.smem_len <= 0) {
+        close(fd);
         return -errno;
+    }
 
     module->flags = flags;
     module->info = info;
@@ -308,6 +320,7 @@ int mapFrameBufferLocked(struct private_module_t* module)
      * map the framebuffer
      */
 
+    int err;
     module->numBuffers = info.yres_virtual / info.yres;
     module->bufferMask = 0;
     //adreno needs page aligned offsets. Align the fbsize to pagesize.
@@ -320,6 +333,7 @@ int mapFrameBufferLocked(struct private_module_t* module)
     void* vaddr = mmap(0, fbSize, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
     if (vaddr == MAP_FAILED) {
         ALOGE("Error mapping the framebuffer (%s)", strerror(errno));
+        close(fd);
         return -errno;
     }
     module->framebuffer->base = intptr_t(vaddr);
@@ -352,7 +366,9 @@ static int fb_close(struct hw_device_t *dev)
 {
     fb_context_t* ctx = (fb_context_t*)dev;
     if (ctx) {
-        free(ctx);
+        //Hack until fbdev is removed. Framework could close this causing hwc a
+        //pain.
+        //free(ctx);
     }
     return 0;
 }
@@ -369,6 +385,10 @@ int fb_device_open(hw_module_t const* module, const char* name,
 
         /* initialize our state here */
         fb_context_t *dev = (fb_context_t*)malloc(sizeof(*dev));
+        if(dev == NULL) {
+            gralloc_close(gralloc_device);
+            return status;
+        }
         memset(dev, 0, sizeof(*dev));
 
         /* initialize the procs */

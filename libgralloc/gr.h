@@ -19,7 +19,6 @@
 #define GR_H_
 
 #include <stdint.h>
-#include <sys/user.h>
 #include <limits.h>
 #include <sys/cdefs.h>
 #include <hardware/gralloc.h>
@@ -58,11 +57,13 @@ int decideBufferHandlingMechanism(int format, const char *compositionUsed,
 // It is the responsibility of the caller to free the buffer
 int alloc_buffer(private_handle_t **pHnd, int w, int h, int format, int usage);
 void free_buffer(private_handle_t *hnd);
+int getYUVPlaneInfo(private_handle_t* pHnd, struct android_ycbcr* ycbcr);
 
 /*****************************************************************************/
 
 class Locker {
     pthread_mutex_t mutex;
+    pthread_cond_t cond;
     public:
     class Autolock {
         Locker& locker;
@@ -70,10 +71,18 @@ class Locker {
         inline Autolock(Locker& locker) : locker(locker) {  locker.lock(); }
         inline ~Autolock() { locker.unlock(); }
     };
-    inline Locker()        { pthread_mutex_init(&mutex, 0); }
-    inline ~Locker()       { pthread_mutex_destroy(&mutex); }
+    inline Locker()        {
+        pthread_mutex_init(&mutex, 0);
+        pthread_cond_init(&cond, 0);
+    }
+    inline ~Locker()       {
+        pthread_mutex_destroy(&mutex);
+        pthread_cond_destroy(&cond);
+    }
     inline void lock()     { pthread_mutex_lock(&mutex); }
+    inline void wait()     { pthread_cond_wait(&cond, &mutex); }
     inline void unlock()   { pthread_mutex_unlock(&mutex); }
+    inline void signal()   { pthread_cond_signal(&cond); }
 };
 
 
@@ -85,12 +94,13 @@ class AdrenoMemInfo : public android::Singleton <AdrenoMemInfo>
     ~AdrenoMemInfo();
 
     /*
-     * Function to compute the adreno stride based on the width and format.
+     * Function to compute the adreno aligned width and aligned height
+     * based on the width and format.
      *
-     * @return stride.
+     * @return aligned width, aligned height
      */
-    int getStride(int width, int format);
-
+    void getAlignedWidthAndHeight(int width, int height, int format,
+                                  int& alignedw, int &alignedh);
     private:
         // Pointer to the padding library.
         void *libadreno_utils;
@@ -100,5 +110,15 @@ class AdrenoMemInfo : public android::Singleton <AdrenoMemInfo>
                                                 int surface_tile_height,
                                                 int screen_tile_height,
                                                 int padding_threshold);
+        // link to the surface padding library.
+        void (*LINK_adreno_compute_aligned_width_and_height) (int width,
+                                                int height,
+                                                int bpp,
+                                                int tile_mode,
+                                                int raster_mode,
+                                                int padding_threshold,
+                                                int *aligned_w,
+                                                int *aligned_h);
+
 };
 #endif /* GR_H_ */

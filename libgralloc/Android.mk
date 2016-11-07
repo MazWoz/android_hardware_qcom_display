@@ -17,9 +17,6 @@ LOCAL_PATH := $(call my-dir)
 include $(LOCAL_PATH)/../common.mk
 include $(CLEAR_VARS)
 
-# gralloc.cpp:87  use of GNU old-style field designator extension.
-LOCAL_CLANG_CFLAGS            += -Wno-gnu-designator
-
 LOCAL_MODULE                  := gralloc.$(TARGET_BOARD_PLATFORM)
 LOCAL_MODULE_PATH             := $(TARGET_OUT_SHARED_LIBRARIES)/hw
 LOCAL_MODULE_TAGS             := optional
@@ -31,6 +28,10 @@ LOCAL_ADDITIONAL_DEPENDENCIES := $(common_deps) $(kernel_deps)
 LOCAL_SRC_FILES               := gpu.cpp gralloc.cpp framebuffer.cpp mapper.cpp
 LOCAL_COPY_HEADERS_TO         := $(common_header_export_path)
 LOCAL_COPY_HEADERS            := gralloc_priv.h
+
+ifeq ($(TARGET_USE_COMPAT_GRALLOC_PERFORM),true)
+LOCAL_CFLAGS += -DGRALLOC_PERFORM_COMPAT
+endif
 
 include $(BUILD_SHARED_LIBRARY)
 

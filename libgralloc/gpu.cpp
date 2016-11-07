@@ -44,9 +44,6 @@ gpu_context_t::gpu_context_t(const private_module_t* module,
     common.module  = const_cast<hw_module_t*>(&module->base.common);
     common.close   = gralloc_close;
     alloc          = gralloc_alloc;
-#ifdef QCOM_BSP
-    allocSize      = gralloc_alloc_size;
-#endif
     free           = gralloc_free;
 
 }
@@ -69,8 +66,9 @@ int gpu_context_t::gralloc_alloc_buffer(size_t size, int usage,
 
     /* force 1MB alignment selectively for secure buffers, MDP5 onwards */
 #ifdef MDSS_TARGET
-    if (usage & GRALLOC_USAGE_PROTECTED) {
-        data.align = ALIGN(data.align, SZ_1M);
+    if ((usage & GRALLOC_USAGE_PROTECTED) &&
+        (usage & GRALLOC_USAGE_PRIVATE_MM_HEAP)) {
+        data.align = ALIGN((int) data.align, SZ_1M);
         size = ALIGN(size, data.align);
     }
 #endif
@@ -95,13 +93,9 @@ int gpu_context_t::gralloc_alloc_buffer(size_t size, int usage,
 
         if (usage & GRALLOC_USAGE_PRIVATE_EXTERNAL_ONLY) {
             flags |= private_handle_t::PRIV_FLAGS_EXTERNAL_ONLY;
-            //The EXTERNAL_BLOCK flag is always an add-on
-            if (usage & GRALLOC_USAGE_PRIVATE_EXTERNAL_BLOCK) {
-                flags |= private_handle_t::PRIV_FLAGS_EXTERNAL_BLOCK;
-            }
-            if (usage & GRALLOC_USAGE_PRIVATE_EXTERNAL_CC) {
-                flags |= private_handle_t::PRIV_FLAGS_EXTERNAL_CC;
-            }
+        }
+        if (usage & GRALLOC_USAGE_PRIVATE_INTERNAL_ONLY) {
+            flags |= private_handle_t::PRIV_FLAGS_INTERNAL_ONLY;
         }
 
         if (bufferType == BUFFER_TYPE_VIDEO) {
@@ -146,6 +140,21 @@ int gpu_context_t::gralloc_alloc_buffer(size_t size, int usage,
             flags |= private_handle_t::PRIV_FLAGS_HW_TEXTURE;
         }
 
+        if(usage & GRALLOC_USAGE_PRIVATE_SECURE_DISPLAY) {
+            flags |= private_handle_t::PRIV_FLAGS_SECURE_DISPLAY;
+        }
+
+        if (usage & (GRALLOC_USAGE_HW_VIDEO_ENCODER |
+                GRALLOC_USAGE_HW_CAMERA_WRITE |
+                GRALLOC_USAGE_HW_RENDER |
+                GRALLOC_USAGE_HW_FB)) {
+            flags |= private_handle_t::PRIV_FLAGS_NON_CPU_WRITER;
+        }
+
+        if(false == data.uncached) {
+            flags |= private_handle_t::PRIV_FLAGS_CACHED;
+        }
+
         flags |= data.allocType;
         int eBaseAddr = int(eData.base) + eData.offset;
         private_handle_t *hnd = new private_handle_t(data.fd, size, flags,
@@ -178,7 +187,7 @@ void gpu_context_t::getGrallocInformationFromFormat(int inputFormat,
     }
 }
 
-int gpu_context_t::gralloc_alloc_framebuffer_locked(size_t size, int usage,
+int gpu_context_t::gralloc_alloc_framebuffer_locked(size_t /*size*/, int usage,
                                                     buffer_handle_t* pHandle)
 {
     private_module_t* m = reinterpret_cast<private_module_t*>(common.module);
@@ -272,19 +281,13 @@ int gpu_context_t::alloc_impl(int w, int h, int format, int usage,
             grallocFormat = HAL_PIXEL_FORMAT_YCrCb_420_SP; //NV21
         else if(usage & GRALLOC_USAGE_HW_CAMERA_WRITE)
             grallocFormat = HAL_PIXEL_FORMAT_YCrCb_420_SP; //NV21
-        //If flexible yuv is used for sw read/write, need map to NV21
-        else if(format == HAL_PIXEL_FORMAT_YCbCr_420_888 &&
-            (usage & GRALLOC_USAGE_SW_WRITE_MASK ||
-            usage & GRALLOC_USAGE_SW_READ_MASK)) {
+        else if(usage & GRALLOC_USAGE_HW_COMPOSER)
+            //XXX: If we still haven't set a format, default to RGBA8888
+            grallocFormat = HAL_PIXEL_FORMAT_RGBA_8888;
+        //If no other usage flags are detected, default the
+        //flexible YUV format to NV21.
+        else if(format == HAL_PIXEL_FORMAT_YCbCr_420_888)
             grallocFormat = HAL_PIXEL_FORMAT_YCrCb_420_SP;
-        }
-
-    }
-
-    if (grallocFormat == HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED &&
-            (usage & GRALLOC_USAGE_HW_COMPOSER )) {
-        //XXX: If we still haven't set a format, default to RGBA8888
-        grallocFormat = HAL_PIXEL_FORMAT_RGBA_8888;
     }
 
     getGrallocInformationFromFormat(grallocFormat, &bufferType);
@@ -293,13 +296,6 @@ int gpu_context_t::alloc_impl(int w, int h, int format, int usage,
     if ((ssize_t)size <= 0)
         return -EINVAL;
     size = (bufferSize >= size)? bufferSize : size;
-
-    // All buffers marked as protected or for external
-    // display need to go to overlay
-    if ((usage & GRALLOC_USAGE_EXTERNAL_DISP) ||
-        (usage & GRALLOC_USAGE_PROTECTED)) {
-        bufferType = BUFFER_TYPE_VIDEO;
-    }
 
     bool useFbMem = false;
     char property[PROPERTY_VALUE_MAX];
@@ -399,3 +395,4 @@ int gpu_context_t::gralloc_close(struct hw_device_t *dev)
     }
     return 0;
 }
+
